@@ -1,0 +1,11 @@
+# Optional NVIDIA GPU support for Ollama (requires nvidia-container-toolkit).
+# Use with: docker compose -f compose.yaml -f compose.gpu.yaml up -d
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

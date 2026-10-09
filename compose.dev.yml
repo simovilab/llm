@@ -1,0 +1,26 @@
+# Local development: no Traefik, no external networks. Services are published on
+# loopback only (127.0.0.1), so nothing is reachable from other machines.
+#
+#   docker compose -f compose.yml -f compose.dev.yml up -d --build
+#
+#   LiteLLM  http://localhost:4000      (admin UI: http://localhost:4000/ui)
+#   MCP      http://localhost:8000/mcp
+#   Ollama   http://localhost:11435     (container; 11434 is left to a native Ollama)
+
+services:
+  ollama:
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11435}:11434"
+
+  litellm:
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    # Lets LiteLLM reach a native Ollama on the host (for models the Linux
+    # container cannot run, such as Laya's MLX builds) at
+    # http://host.docker.internal:11434. Built in on Docker Desktop.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  mcp:
+    ports:
+      - "127.0.0.1:${MCP_PORT:-8000}:8000"

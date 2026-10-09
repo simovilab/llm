@@ -1,0 +1,42 @@
+# Production: routing by an external Traefik container that shares the external
+# `traefik_proxy` network. Nothing is published on host ports.
+#
+#   docker compose -f compose.yml -f compose.prod.yml up -d --build
+#
+#   LiteLLM  https://llm.simovi.org  (/ redirects to the admin UI at /ui)
+#   MCP      https://mcp.simovi.org/mcp
+
+services:
+  litellm:
+    networks:
+      - internal
+      - traefik_proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik_proxy
+      - traefik.http.routers.llm.rule=Host(`${LLM_HOST:-llm.simovi.org}`)
+      - traefik.http.routers.llm.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.llm.tls=true
+      - traefik.http.routers.llm.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      # POST /v1/systemone/ would otherwise get a 307 redirect from LiteLLM.
+      - traefik.http.middlewares.llm-systemone-slash.replacepathregex.regex=^/v1/systemone/$$
+      - traefik.http.middlewares.llm-systemone-slash.replacepathregex.replacement=/v1/systemone
+      - traefik.http.routers.llm.middlewares=llm-systemone-slash
+      - traefik.http.services.llm.loadbalancer.server.port=4000
+
+  mcp:
+    networks:
+      - internal
+      - traefik_proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik_proxy
+      - traefik.http.routers.mcp.rule=Host(`${MCP_HOST:-mcp.simovi.org}`)
+      - traefik.http.routers.mcp.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.mcp.tls=true
+      - traefik.http.routers.mcp.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.services.mcp.loadbalancer.server.port=8000
+
+networks:
+  traefik_proxy:
+    external: true

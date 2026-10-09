@@ -1,0 +1,136 @@
+name: llm
+
+# Local LLM server (base definition, shared by dev and prod):
+#   Ollama   (model server)   - internal only
+#   LiteLLM  (gateway/proxy)  - OpenAI-compatible API, admin UI at /ui
+#   Postgres (LiteLLM state)  - internal only
+#   FastMCP  (MCP endpoint)   - /mcp
+#
+# Use it with one of the overrides, which add how the services are exposed:
+#   dev:  docker compose -f compose.yml -f compose.dev.yml up -d --build
+#   prod: docker compose -f compose.yml -f compose.prod.yml up -d --build
+
+services:
+  ollama:
+    image: ollama/ollama:0.40.2
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - internal
+
+  # One-shot job that pulls the models listed in OLLAMA_MODELS.
+  # Re-run with: docker compose run --rm ollama-pull
+  ollama-pull:
+    image: ollama/ollama:0.40.2
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODELS_TO_PULL: ${OLLAMA_MODELS:-gemma4:e4b embeddinggemma}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for model in $$OLLAMA_MODELS_TO_PULL; do
+          echo "Pulling $$model"
+          ollama pull "$$model" || exit 1
+        done
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:18.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: litellm
+    volumes:
+      # PostgreSQL 18+ images keep data in a versioned subdirectory of this path.
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  litellm:
+    image: litellm/litellm:v1.104.2
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set LITELLM_SALT_KEY in .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      # Swagger moves to /docs so that / can redirect to the admin UI.
+      DOCS_URL: /docs
+      ROOT_REDIRECT_URL: /ui
+      # Trust X-Forwarded-* headers from a reverse proxy so redirects keep https.
+      # Safe here: the container is only reachable through Docker networks / loopback.
+      FORWARDED_ALLOW_IPS: "*"
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:?Set UI_PASSWORD in .env}
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - internal
+
+  mcp:
+    build:
+      context: ./mcp
+    image: llm-fastmcp:local
+    restart: unless-stopped
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      LITELLM_BASE_URL: http://litellm:4000
+      # Dedicated virtual key; register it once with scripts/create-mcp-key.sh
+      LITELLM_API_KEY: ${MCP_LITELLM_API_KEY:?Set MCP_LITELLM_API_KEY in .env}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - internal
+
+volumes:
+  ollama_data:
+  postgres_data:
+
+networks:
+  internal:
