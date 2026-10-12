@@ -6,6 +6,9 @@
 #   OLLAMA_API_BASE default http://ollama:11434 (the Ollama container)
 #   LAYA_API_BASE   if set, also registers Laya, served by an Ollama that can run
 #                   it (dev: http://host.docker.internal:11434, a native macOS Ollama)
+#   NIMBLE_API_BASE if set, also registers Nimble (System 1 model), e.g.
+#                   http://ollama:11434 for the Ollama container (needs `nimble`
+#                   in OLLAMA_MODELS)
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -43,4 +46,9 @@ register embeddinggemma ollama/embeddinggemma "$OLLAMA_API_BASE"
 if [ -n "${LAYA_API_BASE:-}" ]; then
   # typesafe provider: same /v1/systemone protocol; Ollama ignores the key, LiteLLM requires one.
   register laya typesafe/laya "$LAYA_API_BASE" ollama
+fi
+
+if [ -n "${NIMBLE_API_BASE:-}" ]; then
+  # Same typesafe provider and /v1/systemone protocol as Laya.
+  register nimble typesafe/nimble "$NIMBLE_API_BASE" ollama
 fi

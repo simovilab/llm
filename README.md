@@ -113,6 +113,42 @@ curl http://localhost:4000/v1/embeddings \
 
 Pull additional models by adding them to `OLLAMA_MODELS` (a space-separated list, keep the quotes in `.env`), register them in LiteLLM, then run `docker compose run --rm ollama-pull`.
 
+### Test production with a virtual key
+
+Smoke test of a deployed stack with a virtual key (create one in the admin UI under Virtual Keys, or with `/key/generate` above). Read the key without echoing it, so it stays out of your shell history and screen:
+
+```sh
+read -rs LITELLM_KEY   # paste the key, press Enter (it must be this variable name)
+export LITELLM_KEY
+export LLM_URL=https://llm.simovi.org
+
+# Models this key can use
+curl -s $LLM_URL/v1/models -H "Authorization: Bearer $LITELLM_KEY" | jq -r '.data[].id'
+
+# Chat (gemma4)
+curl -s $LLM_URL/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gemma4", "reasoning_effort": "none", "messages": [{"role": "user", "content": "Translate to French: Good evening"}]}' \
+  | jq -r '.choices[0].message.content'
+
+# Embeddings (embeddinggemma, 768 dimensions)
+curl -s $LLM_URL/v1/embeddings \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "embeddinggemma", "input": ["Good evening", "Bonsoir"]}' \
+  | jq '{model, dims: (.data[0].embedding | length), usage}'
+
+# System 1 (nimble)
+curl -s $LLM_URL/v1/systemone \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "nimble", "state": "I was charged twice. Please refund the extra payment.", "questions": {"team": {"type": "choice", "instructions": "Which team should handle this ticket?", "criteria": {"billing": "Payments and refunds", "technical": "Bugs and integrations", "other": "None of the above"}}, "refund": {"type": "noul", "instructions": "Does the customer explicitly ask for a refund?"}}}' \
+  | jq
+```
+
+The first request to each model can take 20 s or more while Ollama loads it (CPU only). A 401 or "key not allowed to access model" error means the key's model restriction excludes that model; edit the key in the admin UI. Run `unset LITELLM_KEY` when done.
+
 ### MCP server key
 
 The MCP server calls LiteLLM with its own virtual key (`MCP_LITELLM_API_KEY` in `.env`), not the master key. After the first start, register it once with `./scripts/create-mcp-key.sh` (set `LITELLM_URL` for a local run, see above). Until it is registered, MCP tools that call LiteLLM (for example `list_llm_models`) fail with an authentication error. Restrict the `mcp-server` key's models or budget in the admin UI if needed.
@@ -145,6 +181,14 @@ curl http://localhost:4000/v1/systemone \
 
 In production a trailing slash (`/v1/systemone/`) also works; Traefik strips it.
 
-**Production (not deployed yet).** A Linux server cannot run Laya through the Ollama container. Until that is decided, `laya` is simply not registered there. Options for later: a separate Laya server (the official `laya-serve`, which runs on CPU) registered in LiteLLM the same way with its own `api_base`, or an Ollama with an MLX runtime (an Apple Silicon host, or a build from source with CUDA 13).
+**Nimble (works in the Ollama container).** Nimble (Bespoke Labs, 9B, ~9.5 GB) is a System 1 model with the same `/v1/systemone` API that does run in the Linux `ollama/ollama` container (no MLX needed). Add `nimble` to `OLLAMA_MODELS` in `.env`, run `docker compose run --rm ollama-pull`, then register it:
+
+```sh
+NIMBLE_API_BASE=http://ollama:11434 ./scripts/register-models.sh   # add LITELLM_URL=http://localhost:4000 in dev
+```
+
+Call it exactly like Laya, with `"model": "nimble"`. Choice and score questions take 2 to 26 options, and every `noul` question needs `instructions`. Without a GPU the first request loads the model and takes about 20 s.
+
+**Production (Laya not deployed yet).** A Linux server cannot run Laya through the Ollama container.
 
 LiteLLM's dedicated `laya` provider (used by its Auto Router) is not in the pinned LiteLLM version and only accepts the checkpoint names `english`, `multilingual` and `typed-decisions`, so `typesafe` is used instead.
